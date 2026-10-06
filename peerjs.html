@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>ヒット&ブロー 手動接続版</title>
+<title>ヒット&ブロー オンライン対戦</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>window.Peer||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"><\/script>')</script>
+<script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <style>
 :root{--bg:#1b1f2a;--pn:#262c3b;--in:#11151d;--tx:#f4f1ea;--mu:#aab3c5;--ac:#ff8a3d}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font-family:Arial,"Noto Sans JP",sans-serif}
@@ -28,7 +31,7 @@ input{height:48px;text-align:center}textarea{height:110px;font:12px monospace;wo
 const COLORS=['#ef5350','#4d8dff','#3fb87f','#f7d94c','#b27cf5','#f4f1ea'],NAMES=['赤','青','緑','黄','紫','白'],L=4;
 const $=id=>document.getElementById(id);
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-const S={screen:'home',cfg:{m:'c',lim:8,lm:1,rk:1},name:'',isHost:false,pc:null,dc:null,myCode:'',inCode:'',msg:'',bad:false,busy:false,
+const S={screen:'home',cfg:{m:'c',lim:8,lm:1,rk:1},name:'',isHost:false,peer:null,conn:null,peerOn:false,code:'',diag:'',msg:'',bad:false,busy:false,
   first:false,secret:[],current:[],mine:[],theirs:[],turn:false,ready:false,oppReady:false,pending:null,oppSecret:null,over:null};
 const num=()=>S.cfg.m==='n',K=()=>num()?10:6;
 function tok(c,s=26){const z=`width:${s}px;height:${s}px;line-height:${s}px;font-size:${Math.round(s*.55)}px;`;
@@ -49,29 +52,20 @@ const say=(m,bad)=>{S.msg=m;S.bad=!!bad;render()};
 function render(){
   let h='<h1 class="ctr" style="margin:0;font-size:28px">ヒット&amp;ブロー</h1>';const sc=S.screen;
   if(sc==='home'){
-    h+=`<div class="ctr sm">手動接続版(サーバー不要)</div>${banner()}
+    h+=`<div class="ctr sm">${esc(S.diag)}</div>${banner()}
     <div class="pn"><div class="t">プレイヤー名(任意)</div><input id="name" maxlength="12" value="${esc(S.name)}" placeholder="名前"></div>
-    <button class="m" id="mkHost" style="min-height:64px" ${S.busy?'disabled':''}>ルームを作る(ホスト)<br><small style="font-weight:500">招待コードを友達に送る</small></button>
-    <button id="mkGuest" style="min-height:64px;background:#4d8dff;color:#0b1020">入室する(ゲスト)<br><small style="font-weight:500">友達の招待コードを貼り付ける</small></button>
+    <button class="m" id="mkHost" style="min-height:64px" ${S.busy?'disabled':''}>ルームを作る<br><small style="font-weight:500">コードを自動で発行します</small></button>
+    <div class="ctr sm">― または、友達のルームに入る ―</div>
+    <input id="cd" inputmode="numeric" maxlength="8" value="${esc(S.code)}" placeholder="友達のルームコード">
+    <button id="join" style="background:#4d8dff;color:#0b1020" ${S.busy?'disabled':''}>入室する</button>
     <div class="pn"><div class="t">この端末のランキング</div>${renderLB()}</div>
-    <div class="ctr sm"><a href="index.html" style="color:var(--mu)">6桁コードの通常版に戻る</a> ／ <a href="peerjs.html" style="color:var(--mu)">PeerJS版</a></div>`;
-  }else if(sc==='host'){
-    h+=`${banner()}<div class="sm">⚠️ コードを送ったら<b>すぐこのブラウザへ戻って</b>ください。別アプリを開いたままだと接続が切れます。両方Wi-Fi推奨です。</div><div class="pn"><div class="t">① 招待コード(これを友達に送る)</div><textarea readonly id="mine">${esc(S.myCode)||'作成中…'}</textarea>
-      <button id="cp" style="width:100%;margin-top:8px" ${S.myCode?'':'disabled'}>コピー</button></div>
-      <div class="pn"><div class="t">② 友達から届いた返信コードを貼り付け</div><textarea id="inp" placeholder="返信コード">${esc(S.inCode)}</textarea>
-      <button class="m" id="conn" style="width:100%;margin-top:8px" ${S.busy?'disabled':''}>接続する</button></div>
-      <button id="bk">やめる</button>`;
-  }else if(sc==='guest'){
-    h+=`${banner()}<div class="sm">⚠️ コードを送ったら<b>すぐこのブラウザへ戻って</b>ください。別アプリを開いたままだと接続が切れます。両方Wi-Fi推奨です。</div><div class="pn"><div class="t">① ホストの招待コードを貼り付け</div><textarea id="inp" placeholder="招待コード">${esc(S.inCode)}</textarea>
-      <button class="m" id="mkAns" style="width:100%;margin-top:8px" ${S.busy?'disabled':''}>返信コードを作る</button></div>
-      ${S.myCode?`<div class="pn"><div class="t">② 返信コード(これをホストに送る)</div><textarea readonly id="mine">${esc(S.myCode)}</textarea>
-      <button id="cp" style="width:100%;margin-top:8px">コピー</button><div class="sm" style="margin-top:6px">ホストが貼り付けると自動で接続されます</div></div>`:''}
-      <button id="bk">やめる</button>`;
+    <div class="ctr sm"><a href="index.html" style="color:var(--mu)">通常版</a> ／ <a href="manual.html" style="color:var(--mu)">手動接続版</a></div>`;
   }else if(sc==='room'){
-    h+=`${banner()}<div class="pn"><div class="t">✅ 接続できました</div>
+    h+=`${banner()}<div class="pn"><div class="t">ルームコード(友達に伝える)</div><div class="big" style="font-size:44px;letter-spacing:6px;text-align:center;margin-bottom:6px">${esc(S.code)}</div><div class="ctr sm" style="margin-bottom:6px">${S.peerOn?'✅ 相手が入室しました':'相手の入室を待っています…'}</div>${S.isHost&&!S.peerOn?'<button id="shr" style="width:100%">コードを共有・コピー</button><div class="ctr sm" style="margin-top:6px">共有したらこの画面に戻ってお待ちください</div>':''}
     ${S.isHost?grp('形式',opt('m','c','カラー')+opt('m','n','数字'))+grp('手数制限',opt('lim',6,'6手')+opt('lim',8,'8手')+opt('lim',10,'10手')+opt('lim',0,'無制限'))+
       grp('後攻の最終手',opt('lm',1,'あり')+opt('lm',0,'なし'))+grp('ランキング',opt('rk',1,'記録')+opt('rk',0,'記録しない')):`<div>${cfgTxt(S.cfg)}</div>`}</div>
-    ${S.isHost?'<button class="m" id="start">この設定で開始</button>':'<div class="ctr sm">ホストの開始を待っています…</div>'}`;
+    ${S.isHost?`<button class="m" id="start" ${S.peerOn?'':'disabled'}>この設定で開始</button>`:'<div class="ctr sm">ホストの開始を待っています…</div>'}
+    <button id="bk">ルームを出る</button>`;
   }else if(sc==='setup'){
     h+=`${banner()}<div class="ctr sm">${cfgTxt(S.cfg)}</div>
     <div class="pn ctr"><div class="t">あなたの答え(重複なし)</div><div style="display:flex;justify-content:center;gap:10px">${toks(S.secret,44)}</div></div>
@@ -95,44 +89,72 @@ function record(r){if(!S.cfg.rk)return;const key=(S.name||'名無し').trim()||'
   let x=lb.find(a=>a.n===key);if(!x){x={n:key,w:0,l:0,d:0};lb.push(x)}x[r==='win'?'w':r==='lose'?'l':'d']++;
   lb.sort((a,b)=>b.w-a.w||a.l-b.l);localStorage.setItem('hb-rank',JSON.stringify(lb.slice(0,50)))}
 
-/* ---------- 手動シグナリング(WebRTC) ---------- */
-const b64=u=>btoa(String.fromCharCode(...u)),ub64=t=>Uint8Array.from(atob(t),c=>c.charCodeAt(0));
-async function enc(d){const j=JSON.stringify({t:d.type,s:d.sdp});
-  try{const z=new Blob([j]).stream().pipeThrough(new CompressionStream('deflate-raw'));return 'z'+b64(new Uint8Array(await new Response(z).arrayBuffer()))}
-  catch(e){return 'p'+b64(new TextEncoder().encode(j))}}
-async function dec(t){t=t.replace(/\s+/g,'');const raw=ub64(t.slice(1));let j;
-  if(t[0]==='z')j=await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
-  else j=new TextDecoder().decode(raw);const o=JSON.parse(j);return{type:o.t,sdp:o.s}}
-const gathered=pc=>new Promise(r=>{if(pc.iceGatheringState==='complete')return r();const t=setTimeout(r,5000);
-  pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);r()}})});
-function newPC(){closeAll();
-  const pc=S.pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}]});
-  pc.oniceconnectionstatechange=()=>{const st=pc.iceConnectionState;if(['host','guest'].includes(S.screen)&&st==='checking')say('接続中…(このブラウザを開いたままにしてください)')};
-  pc.onconnectionstatechange=()=>{if(pc.connectionState==='failed'&&S.screen!=='home'){say('接続に失敗しました。両方のスマホをWi-Fiにして、コードを送ったらすぐこのブラウザへ戻り、最初からやり直してください(モバイル回線では直接接続できないことがあります)',1)}};
-  return pc}
+/* ---------- 通信(PeerJS) ---------- */
+function errText(e){const t=e?.type||'';
+  if(t==='nolib')return '通信ライブラリ(PeerJS)を読み込めませんでした。ネット接続や広告ブロックを確認してください';
+  if(t==='timeout')return '接続サーバーから応答がありません。時間をおいて再試行してください';
+  if(['network','server-error','socket-error','socket-closed'].includes(t))return '接続サーバー(PeerJS)に接続できません ['+t+']。繋がらない時は手動接続版をお使いください';
+  return '接続エラー ['+(t||'error')+'] '+(e?.message||'')}
+function openPeer(id){return new Promise((res,rej)=>{
+  if(typeof Peer==='undefined'){rej({type:'nolib'});return}
+  let p;try{p=id?new Peer(id):new Peer()}catch(e){rej({type:'init',message:String(e&&e.message||e)});return}
+  let settled=false;
+  const to=setTimeout(()=>{if(settled)return;settled=true;try{p.destroy()}catch(_){}rej({type:'timeout'})},15000);
+  p.on('open',()=>{if(settled)return;settled=true;clearTimeout(to);res(p)});
+  // 接続が開いた後のエラーでは破棄しない(開く前のエラーのみ処理)
+  p.on('error',e=>{if(settled)return;settled=true;clearTimeout(to);try{p.destroy()}catch(_){}rej(e)})})}
+const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let wl=null;async function keepAwake(){try{wl=await navigator.wakeLock?.request('screen')}catch(_){}}
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&S.screen!=='home')keepAwake()});
-function closeAll(){try{S.dc?.close()}catch(_){}try{S.pc?.close()}catch(_){}S.pc=S.dc=null}
-function setupDC(ch){S.dc=ch;
-  ch.onopen=()=>{S.msg='';S.screen='room';keepAwake();render()};
-  ch.onmessage=e=>onData(JSON.parse(e.data));
-  ch.onclose=()=>{if(S.screen!=='home'){closeAll();S.screen='home';say('相手との接続が切れました',1)}}}
-const send=m=>{if(S.dc?.readyState==='open')S.dc.send(JSON.stringify(m))};
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='visible')return;
+  if(S.peer&&S.peer.disconnected&&!S.peer.destroyed){try{S.peer.reconnect()}catch(_){}}if(S.screen!=='home')keepAwake()});
+function leave(){try{S.conn?.close()}catch(_){}try{S.peer?.destroy()}catch(_){}S.peer=S.conn=null;S.peerOn=false}
+const send=m=>{if(S.conn?.open)S.conn.send(m)};
+function attach(c){S.conn=c;c.on('data',onData);
+  c.on('close',()=>{if(S.conn!==c)return;
+    if(S.isHost&&S.screen==='room'){S.conn=null;S.peerOn=false;say('相手が退出しました')}
+    else if(S.screen!=='home'){leave();S.screen='home';say('相手との接続が切れました',1)}})}
+async function probe(code){ // 別のPeerからルームに届くか確認する
+  let q;try{q=await openPeer()}catch(e){return true}
+  return new Promise(res=>{let d=false;const f=ok=>{if(d)return;d=true;clearTimeout(t);try{q.destroy()}catch(_){}res(ok)};
+    const t=setTimeout(()=>f(false),8000);
+    const c=q.connect('hb-'+code,{metadata:{probe:1},serialization:'json'});
+    q.on('error',()=>f(false));c.on('error',()=>f(false));c.on('open',()=>f(true))})}
 async function hostCreate(){
-  S.name=($('name')?.value||S.name).trim()||'名無し';S.isHost=true;S.myCode='';S.inCode='';S.msg='';S.busy=true;S.screen='host';render();
-  try{const pc=newPC();setupDC(pc.createDataChannel('g'));await pc.setLocalDescription(await pc.createOffer());await gathered(pc);
-    S.myCode=await enc(pc.localDescription);}catch(e){say('作成に失敗しました: '+e.message,1)}
-  S.busy=false;render()}
-async function hostConnect(){
-  S.busy=true;S.msg='';render();
-  try{await S.pc.setRemoteDescription(await dec(S.inCode));say('接続中…')}catch(e){say('返信コードが正しくありません。コピーし直してください',1)}
-  S.busy=false;render()}
-async function guestMake(){
-  S.name=($('name')?.value||S.name).trim()||'名無し';S.isHost=false;S.myCode='';S.msg='';S.busy=true;render();
-  try{const pc=newPC();pc.ondatachannel=e=>setupDC(e.channel);await pc.setRemoteDescription(await dec(S.inCode));
-    await pc.setLocalDescription(await pc.createAnswer());await gathered(pc);S.myCode=await enc(pc.localDescription);say('返信コードをホストに送ってください')}
-  catch(e){say('招待コードが正しくありません。コピーし直してください',1)}
-  S.busy=false;render()}
+  S.name=($('name')?.value||S.name).trim()||'名無し';S.busy=true;S.msg='ルームを作成中…';S.bad=false;render();leave();
+  for(let i=0;i<6;i++){const code=String(Math.floor(100000+Math.random()*900000));let p;
+    try{p=await openPeer('hb-'+code)}catch(e){if(e?.type==='unavailable-id')continue;S.busy=false;say('ルームを作成できません: '+errText(e),1);return}
+    S.peer=p;S.isHost=true;S.code=code;
+    p.on('connection',c=>{
+      if(c.metadata&&c.metadata.probe){c.on('open',()=>setTimeout(()=>{try{c.close()}catch(_){}},200));return}
+      if(S.conn?.open){c.on('open',()=>{c.send({type:'full'});setTimeout(()=>c.close(),300)});return}
+      c.on('open',()=>{attach(c);S.peerOn=true;S.msg='';send({type:'cfg',cfg:S.cfg});render()})});
+    p.on('error',e=>{if(e.type!=='peer-unavailable')say(errText(e),1)});
+    p.on('disconnected',()=>{try{p.reconnect()}catch(_){}});
+    S.msg='ルームを確認中…';render();
+    if(await probe(code)){S.busy=false;S.msg='';S.screen='room';keepAwake();render();return}
+    try{p.destroy()}catch(_){}S.peer=null}
+  S.busy=false;say('ルームを登録できませんでした(接続サーバーが不安定な可能性があります)。もう一度お試しいただくか、手動接続版をお使いください',1)}
+function joinOnce(code){return new Promise(async(res,rej)=>{
+  let p;try{p=await openPeer()}catch(e){rej(e);return}
+  const c=p.connect('hb-'+code,{reliable:true,serialization:'json'});let d=false;
+  const f=e=>{if(d)return;d=true;clearTimeout(t);try{p.destroy()}catch(_){}rej(e)};
+  const t=setTimeout(()=>f({type:'peer-unavailable'}),12000);
+  p.on('error',f);c.on('error',()=>f({type:'conn'}));
+  c.on('open',()=>{if(d)return;d=true;clearTimeout(t);S.peer=p;res(c)})})}
+async function guestJoin(){
+  S.name=($('name')?.value||S.name).trim()||'名無し';S.code=($('cd')?.value||S.code).trim();
+  if(!S.code){say('ルームコードを入力してください',1);return}
+  S.busy=true;S.bad=false;leave();
+  for(let i=0;i<5;i++){
+    say('ルームを探しています…('+(i+1)+'/5)');S.bad=false;
+    try{const c=await joinOnce(S.code);S.isHost=false;attach(c);S.busy=false;S.peerOn=true;S.msg='';S.screen='room';keepAwake();render();return}
+    catch(e){if(e?.type!=='peer-unavailable'&&e?.type!=='conn'){S.busy=false;say(errText(e),1);return}await sleep(800)}}
+  S.busy=false;say('ルームが見つかりません。コードを確認してください(ホストが画面を開いたままか確認してください)',1)}
+async function runDiag(){S.diag='接続診断中…';render();const lib=typeof Peer!=='undefined';let srv;
+  try{const t=performance.now(),ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),8000);
+    await fetch('https://0.peerjs.com/peerjs/id?ts='+Date.now(),{mode:'no-cors',cache:'no-store',signal:ctl.signal});clearTimeout(to);srv='OK('+Math.round(performance.now()-t)+'ms)'}
+  catch(e){srv='NG(到達できません)'}
+  S.diag='診断: ライブラリ '+(lib?'OK':'NG')+' / 接続サーバー '+srv;if(S.screen==='home')render()}
 
 /* ---------- ゲーム ---------- */
 function resetGame(){Object.assign(S,{secret:[],current:[],mine:[],theirs:[],turn:false,ready:false,oppReady:false,pending:null,oppSecret:null,over:null})}
@@ -144,7 +166,8 @@ function onData(d){
   else if(d.type==='guess'){const[h,b]=score(S.secret,d.g);S.theirs.push({g:d.g,h,b});send({type:'result',h,b});settle();render()}
   else if(d.type==='result'){S.mine.push({g:S.pending,h:d.h,b:d.b});settle();render()}
   else if(d.type==='reveal'){S.oppSecret=d.s;render()}
-  else if(d.type==='again'){resetGame();S.screen='setup';render()}}
+  else if(d.type==='again'){resetGame();S.screen='setup';render()}
+  else if(d.type==='full'){leave();S.screen='home';say('このルームは満員です',1)}}
 function tryStart(){if(S.ready&&S.oppReady&&S.secret.length===L){S.screen='battle';S.turn=S.first;render()}}
 function settle(){
   const f=S.first?S.mine.length:S.theirs.length,s=S.first?S.theirs.length:S.mine.length;
@@ -156,20 +179,20 @@ function settle(){
 
 function bind(){
   const on=(id,fn)=>{const e=$(id);if(e)e.onclick=fn};
-  on('mkHost',hostCreate);on('mkGuest',()=>{S.name=($('name')?.value||S.name);S.screen='guest';S.myCode='';S.inCode='';S.msg='';render()});
-  on('bk',()=>{closeAll();S.screen='home';S.msg='';S.busy=false;render()});
-  on('cp',async()=>{try{await navigator.clipboard.writeText(S.myCode);say('コピーしました')}catch(e){$('mine').select();say('選択しました。長押し/Ctrl+Cでコピーしてください')}});
-  on('conn',hostConnect);on('mkAns',guestMake);
+  on('shr',async()=>{const t='ヒット&ブローのルームコード: '+S.code+'\n'+location.href.split('#')[0];
+    try{if(navigator.share)await navigator.share({text:t});else{await navigator.clipboard.writeText(t);say('コピーしました')}}catch(e){}});
+  on('mkHost',hostCreate);on('join',guestJoin);
+  on('bk',()=>{leave();S.screen='home';S.msg='';S.busy=false;render()});
   on('start',()=>{const d={type:'go',cfg:{...S.cfg}};send(d);begin()});
   on('clr',()=>{S.secret=[];render()});on('ok',()=>{S.ready=true;send({type:'ready'});tryStart();render()});
   on('del',()=>{S.current.pop();render()});
   on('sub',()=>{S.pending=S.current.slice();S.current=[];S.turn=false;send({type:'guess',g:S.pending});render()});
   on('again',()=>{resetGame();S.screen='setup';send({type:'again'});render()});
   const nm=$('name');if(nm)nm.oninput=()=>S.name=nm.value;
-  const ip=$('inp');if(ip)ip.oninput=()=>S.inCode=ip.value;
+  const cd=$('cd');if(cd)cd.oninput=()=>S.code=cd.value.trim();
   document.querySelectorAll('[data-s]').forEach(b=>b.onclick=()=>{const k=b.dataset.s;S.cfg[k]=k==='m'?b.dataset.v:+b.dataset.v;send({type:'cfg',cfg:S.cfg});render()});
   document.querySelectorAll('[data-c]').forEach(b=>b.onclick=()=>{if(S.secret.length<L){S.secret.push(+b.dataset.c);render()}});
   document.querySelectorAll('[data-g]').forEach(b=>b.onclick=()=>{if(S.current.length<L){S.current.push(+b.dataset.g);render()}});
 }
-render();
+render();runDiag();
 </script></body></html>

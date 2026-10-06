@@ -4,9 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>ヒット&ブロー オンライン対戦</title>
-<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
-<script>window.Peer||document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.4/peerjs.min.js"><\/script>')</script>
-<script>window.Peer||document.write('<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"><\/script>')</script>
 <style>
 :root{--bg:#1b1f2a;--pn:#262c3b;--in:#11151d;--tx:#f4f1ea;--mu:#aab3c5;--ac:#ff8a3d}
 *{box-sizing:border-box}html,body{margin:0;background:var(--bg);color:var(--tx);font-family:Arial,"Noto Sans JP",sans-serif}
@@ -59,7 +56,7 @@ function render(){
     <input id="cd" inputmode="numeric" maxlength="8" value="${esc(S.code)}" placeholder="友達のルームコード">
     <button id="join" style="background:#4d8dff;color:#0b1020" ${S.busy?'disabled':''}>入室する</button>
     <div class="pn"><div class="t">この端末のランキング</div>${renderLB()}</div>
-    <div class="ctr sm"><a href="manual.html" style="color:var(--mu)">繋がらない時は手動接続版</a></div>`;
+    <div class="ctr sm"><a href="manual.html" style="color:var(--mu)">手動接続版</a> ／ <a href="peerjs.html" style="color:var(--mu)">PeerJS版</a></div>`;
   }else if(sc==='room'){
     h+=`${banner()}<div class="pn"><div class="t">ルームコード(友達に伝える)</div><div class="big" style="font-size:44px;letter-spacing:6px;text-align:center;margin-bottom:6px">${esc(S.code)}</div><div class="ctr sm" style="margin-bottom:6px">${S.peerOn?'✅ 相手が入室しました':'相手の入室を待っています…'}</div>${S.isHost&&!S.peerOn?'<button id="shr" style="width:100%">コードを共有・コピー</button><div class="ctr sm" style="margin-top:6px">共有したらこの画面に戻ってお待ちください</div>':''}
     ${S.isHost?grp('形式',opt('m','c','カラー')+opt('m','n','数字'))+grp('手数制限',opt('lim',6,'6手')+opt('lim',8,'8手')+opt('lim',10,'10手')+opt('lim',0,'無制限'))+
@@ -89,72 +86,74 @@ function record(r){if(!S.cfg.rk)return;const key=(S.name||'名無し').trim()||'
   let x=lb.find(a=>a.n===key);if(!x){x={n:key,w:0,l:0,d:0};lb.push(x)}x[r==='win'?'w':r==='lose'?'l':'d']++;
   lb.sort((a,b)=>b.w-a.w||a.l-b.l);localStorage.setItem('hb-rank',JSON.stringify(lb.slice(0,50)))}
 
-/* ---------- 通信(PeerJS) ---------- */
-function errText(e){const t=e?.type||'';
-  if(t==='nolib')return '通信ライブラリ(PeerJS)を読み込めませんでした。ネット接続や広告ブロックを確認してください';
-  if(t==='timeout')return '接続サーバーから応答がありません。時間をおいて再試行してください';
-  if(['network','server-error','socket-error','socket-closed'].includes(t))return '接続サーバー(PeerJS)に接続できません ['+t+']。繋がらない時は手動接続版をお使いください';
-  return '接続エラー ['+(t||'error')+'] '+(e?.message||'')}
-function openPeer(id){return new Promise((res,rej)=>{
-  if(typeof Peer==='undefined'){rej({type:'nolib'});return}
-  let p;try{p=id?new Peer(id):new Peer()}catch(e){rej({type:'init',message:String(e&&e.message||e)});return}
-  let settled=false;
-  const to=setTimeout(()=>{if(settled)return;settled=true;try{p.destroy()}catch(_){}rej({type:'timeout'})},15000);
-  p.on('open',()=>{if(settled)return;settled=true;clearTimeout(to);res(p)});
-  // 接続が開いた後のエラーでは破棄しない(開く前のエラーのみ処理)
-  p.on('error',e=>{if(settled)return;settled=true;clearTimeout(to);try{p.destroy()}catch(_){}rej(e)})})}
+const b64=u=>btoa(String.fromCharCode(...u)),ub64=t=>Uint8Array.from(atob(t),c=>c.charCodeAt(0));
+async function enc(d){const j=JSON.stringify({t:d.type,s:d.sdp});
+  try{const z=new Blob([j]).stream().pipeThrough(new CompressionStream('deflate-raw'));return 'z'+b64(new Uint8Array(await new Response(z).arrayBuffer()))}
+  catch(e){return 'p'+b64(new TextEncoder().encode(j))}}
+async function dec(t){t=t.replace(/\s+/g,'');const raw=ub64(t.slice(1));let j;
+  if(t[0]==='z')j=await new Response(new Blob([raw]).stream().pipeThrough(new DecompressionStream('deflate-raw'))).text();
+  else j=new TextDecoder().decode(raw);const o=JSON.parse(j);return{type:o.t,sdp:o.s}}
+const gathered=pc=>new Promise(r=>{if(pc.iceGatheringState==='complete')return r();const t=setTimeout(r,5000);
+  pc.addEventListener('icegatheringstatechange',()=>{if(pc.iceGatheringState==='complete'){clearTimeout(t);r()}})});
+/* ---------- 通信(ntfy.sh で接続を仲介 → WebRTC直結) ---------- */
+const NT='https://ntfy.sh/';let es=null,pc=null;
+const ICE=[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:stun.cloudflare.com:3478'},{urls:['turn:openrelay.metered.ca:80','turn:openrelay.metered.ca:443','turn:openrelay.metered.ca:443?transport=tcp'],username:'openrelayproject',credential:'openrelayproject'}];
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 let wl=null;async function keepAwake(){try{wl=await navigator.wakeLock?.request('screen')}catch(_){}}
-document.addEventListener('visibilitychange',()=>{if(document.visibilityState!=='visible')return;
-  if(S.peer&&S.peer.disconnected&&!S.peer.destroyed){try{S.peer.reconnect()}catch(_){}}if(S.screen!=='home')keepAwake()});
-function leave(){try{S.conn?.close()}catch(_){}try{S.peer?.destroy()}catch(_){}S.peer=S.conn=null;S.peerOn=false}
-const send=m=>{if(S.conn?.open)S.conn.send(m)};
-function attach(c){S.conn=c;c.on('data',onData);
-  c.on('close',()=>{if(S.conn!==c)return;
-    if(S.isHost&&S.screen==='room'){S.conn=null;S.peerOn=false;say('相手が退出しました')}
-    else if(S.screen!=='home'){leave();S.screen='home';say('相手との接続が切れました',1)}})}
-async function probe(code){ // 別のPeerからルームに届くか確認する
-  let q;try{q=await openPeer()}catch(e){return true}
-  return new Promise(res=>{let d=false;const f=ok=>{if(d)return;d=true;clearTimeout(t);try{q.destroy()}catch(_){}res(ok)};
-    const t=setTimeout(()=>f(false),8000);
-    const c=q.connect('hb-'+code,{metadata:{probe:1},serialization:'json'});
-    q.on('error',()=>f(false));c.on('error',()=>f(false));c.on('open',()=>f(true))})}
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible'&&S.screen!=='home')keepAwake()});
+function errText(e){const t=e?.type||'';
+  if(t==='network'||t==='post')return '仲介サービス(ntfy.sh)に接続できません。ネットワークや広告ブロックを確認してください。繋がらない時は手動接続版をお使いください';
+  if(t==='timeout')return '応答がありません。ネットワークによっては直接繋がらないことがあります(Wi-Fi推奨)';
+  return '接続エラー ['+(t||'error')+'] '+(e?.message||'')}
+const post=async(t,o)=>{const r=await fetch(NT+t,{method:'POST',body:JSON.stringify(o)});if(!r.ok)throw{type:'post',message:r.status}};
+function listen(t,onmsg){return new Promise((res,rej)=>{const e=new EventSource(NT+t+'/sse');let ok=false;
+  const to=setTimeout(()=>{if(!ok){e.close();rej({type:'network'})}},10000);
+  e.onopen=()=>{ok=true;clearTimeout(to);res(e)};
+  e.onmessage=ev=>{try{onmsg(JSON.parse(JSON.parse(ev.data).message))}catch(_){}};
+  e.onerror=()=>{if(!ok){clearTimeout(to);e.close();rej({type:'network'})}}})}
+function mkPC(){try{pc?.close()}catch(_){}return pc=new RTCPeerConnection({iceServers:ICE})}
+function leave(){try{S.conn?.close()}catch(_){}try{pc?.close()}catch(_){}try{es?.close()}catch(_){}S.conn=null;pc=null;es=null;S.peerOn=false}
+const send=m=>{if(S.conn?.readyState==='open')S.conn.send(JSON.stringify(m))};
+function wire(ch){S.conn=ch;ch.onmessage=e=>onData(JSON.parse(e.data));
+  ch.onclose=()=>{if(S.conn!==ch)return;
+    if(S.isHost&&S.screen==='room'){S.conn=null;S.peerOn=false;try{pc?.close()}catch(_){}pc=null;say('相手が退出しました')}
+    else if(S.screen!=='home'){leave();S.screen='home';say('相手との接続が切れました',1)}}}
 async function hostCreate(){
   S.name=($('name')?.value||S.name).trim()||'名無し';S.busy=true;S.msg='ルームを作成中…';S.bad=false;render();leave();
-  for(let i=0;i<6;i++){const code=String(Math.floor(100000+Math.random()*900000));let p;
-    try{p=await openPeer('hb-'+code)}catch(e){if(e?.type==='unavailable-id')continue;S.busy=false;say('ルームを作成できません: '+errText(e),1);return}
-    S.peer=p;S.isHost=true;S.code=code;
-    p.on('connection',c=>{
-      if(c.metadata&&c.metadata.probe){c.on('open',()=>setTimeout(()=>{try{c.close()}catch(_){}},200));return}
-      if(S.conn?.open){c.on('open',()=>{c.send({type:'full'});setTimeout(()=>c.close(),300)});return}
-      c.on('open',()=>{attach(c);S.peerOn=true;S.msg='';send({type:'cfg',cfg:S.cfg});render()})});
-    p.on('error',e=>{if(e.type!=='peer-unavailable')say(errText(e),1)});
-    p.on('disconnected',()=>{try{p.reconnect()}catch(_){}});
-    S.msg='ルームを確認中…';render();
-    if(await probe(code)){S.busy=false;S.msg='';S.screen='room';keepAwake();render();return}
-    try{p.destroy()}catch(_){}S.peer=null}
-  S.busy=false;say('ルームを登録できませんでした(接続サーバーが不安定な可能性があります)。もう一度お試しいただくか、手動接続版をお使いください',1)}
-function joinOnce(code){return new Promise(async(res,rej)=>{
-  let p;try{p=await openPeer()}catch(e){rej(e);return}
-  const c=p.connect('hb-'+code,{reliable:true,serialization:'json'});let d=false;
-  const f=e=>{if(d)return;d=true;clearTimeout(t);try{p.destroy()}catch(_){}rej(e)};
-  const t=setTimeout(()=>f({type:'peer-unavailable'}),12000);
-  p.on('error',f);c.on('error',()=>f({type:'conn'}));
-  c.on('open',()=>{if(d)return;d=true;clearTimeout(t);S.peer=p;res(c)})})}
+  const code=String(Math.floor(100000+Math.random()*900000)),topic='hbx'+code;
+  try{let pinged=false;
+    es=await listen(topic,async m=>{
+      if(m.t==='ping'){pinged=true;return}
+      if(m.t!=='offer'||pc)return;
+      try{const p=mkPC();
+        p.ondatachannel=e=>{const ch=e.channel;wire(ch);const go=()=>{S.peerOn=true;S.msg='';send({type:'cfg',cfg:S.cfg});render()};ch.readyState==='open'?go():ch.onopen=go};
+        await p.setRemoteDescription(await dec(m.sdp));await p.setLocalDescription(await p.createAnswer());await gathered(p);
+        await post(topic,{t:'answer',id:m.id,sdp:await enc(p.localDescription)})}catch(_){pc=null}});
+    await post(topic,{t:'ping'});for(let i=0;i<20&&!pinged;i++)await sleep(400);
+    if(!pinged)throw{type:'network'};
+    S.isHost=true;S.code=code;S.busy=false;S.msg='';S.screen='room';keepAwake();render()}
+  catch(e){leave();S.busy=false;say('ルームを作成できません: '+errText(e),1)}}
 async function guestJoin(){
   S.name=($('name')?.value||S.name).trim()||'名無し';S.code=($('cd')?.value||S.code).trim();
   if(!S.code){say('ルームコードを入力してください',1);return}
-  S.busy=true;S.bad=false;leave();
-  for(let i=0;i<5;i++){
-    say('ルームを探しています…('+(i+1)+'/5)');S.bad=false;
-    try{const c=await joinOnce(S.code);S.isHost=false;attach(c);S.busy=false;S.peerOn=true;S.msg='';S.screen='room';keepAwake();render();return}
-    catch(e){if(e?.type!=='peer-unavailable'&&e?.type!=='conn'){S.busy=false;say(errText(e),1);return}await sleep(800)}}
-  S.busy=false;say('ルームが見つかりません。コードを確認してください(ホストが画面を開いたままか確認してください)',1)}
-async function runDiag(){S.diag='接続診断中…';render();const lib=typeof Peer!=='undefined';let srv;
-  try{const t=performance.now(),ctl=new AbortController(),to=setTimeout(()=>ctl.abort(),8000);
-    await fetch('https://0.peerjs.com/peerjs/id?ts='+Date.now(),{mode:'no-cors',cache:'no-store',signal:ctl.signal});clearTimeout(to);srv='OK('+Math.round(performance.now()-t)+'ms)'}
+  S.busy=true;S.bad=false;leave();const topic='hbx'+S.code;let id='',ans=null;
+  try{es=await listen(topic,m=>{if(m.t==='answer'&&m.id===id)ans=m.sdp});
+    for(let i=0;i<2;i++){say('ルームを探しています…('+(i+1)+'/2)');S.bad=false;id=Math.random().toString(36).slice(2);ans=null;
+      const p=mkPC(),ch=p.createDataChannel('g');
+      await p.setLocalDescription(await p.createOffer());await gathered(p);
+      await post(topic,{t:'offer',id,sdp:await enc(p.localDescription)});
+      for(let k=0;k<30&&!ans;k++)await sleep(400);
+      if(!ans){try{p.close()}catch(_){}continue}
+      await p.setRemoteDescription(await dec(ans));
+      await new Promise((res,rej)=>{if(ch.readyState==='open')return res();ch.onopen=res;setTimeout(()=>rej({type:'timeout'}),15000)});
+      wire(ch);S.isHost=false;S.busy=false;S.peerOn=true;S.msg='';S.screen='room';try{es.close()}catch(_){}es=null;keepAwake();render();return}
+    throw{type:'notfound'}}
+  catch(e){leave();S.busy=false;say(e.type==='notfound'?'ルームが見つかりません。コードを確認し、ホストが画面を開いたままか確認してください':errText(e),1)}}
+async function runDiag(){S.diag='接続診断中…';render();const rtc=typeof RTCPeerConnection!=='undefined';let srv;
+  try{const t=performance.now(),c=new AbortController(),to=setTimeout(()=>c.abort(),8000);
+    await fetch(NT+'v1/health',{cache:'no-store',signal:c.signal});clearTimeout(to);srv='OK('+Math.round(performance.now()-t)+'ms)'}
   catch(e){srv='NG(到達できません)'}
-  S.diag='診断: ライブラリ '+(lib?'OK':'NG')+' / 接続サーバー '+srv;if(S.screen==='home')render()}
+  S.diag='診断: WebRTC '+(rtc?'OK':'NG')+' / 仲介サービス '+srv;if(S.screen==='home')render()}
 
 /* ---------- ゲーム ---------- */
 function resetGame(){Object.assign(S,{secret:[],current:[],mine:[],theirs:[],turn:false,ready:false,oppReady:false,pending:null,oppSecret:null,over:null})}
